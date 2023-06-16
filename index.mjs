@@ -15,6 +15,12 @@ const MAX_COUNT = 5
 const questions = [
   {
     type: 'input',
+    name: 'targetURL',
+    message: '请输入你想爬取的小红书页面的 URL',
+    default: 'https://www.xiaohongshu.com/explore?channel_id=homefeed.household_product_v3',
+  },
+  {
+    type: 'input',
     name: 'count',
     message: '您需要爬取多少条数据?',
     validate: function (value) {
@@ -57,7 +63,7 @@ const closeDialog = async (page) => {
   }
 }
 
-const initContext = async (headless) => {
+const initContext = async (url, headless) => {
   // 启动 puppeteer
   const browser = await puppeteer.launch({
     headless,
@@ -70,8 +76,8 @@ const initContext = async (headless) => {
     'Mozilla/5.0 (Windows NT 10.0 Win64 x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'
   )
   // 打开网页
-  console.log('open：https://www.xiaohongshu.com/explore?channel_id=homefeed.household_product_v3')
-  await page.goto('https://www.xiaohongshu.com/explore?channel_id=homefeed.household_product_v3')
+  console.log(`open：${url}`)
+  await page.goto(url)
 
   await closeDialog(page)
 
@@ -190,7 +196,7 @@ const output = (results) => {
 
 // 开始交互
 inquirer.prompt(questions).then(async (answers) => {
-  const { browser, page } = await initContext(answers.headless === 'N' ? 'new' : false)
+  const { browser, page } = await initContext(answers.targetURL, answers.headless === 'N' ? 'new' : false)
 
   const list = await craw(page, answers.count)
 
