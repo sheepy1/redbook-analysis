@@ -28,7 +28,7 @@ const questions = [
       return valid || '请输入一个数字'
     },
     filter: Number,
-    default: 100
+    default: 10
   },
   {
     type: 'list',
@@ -40,15 +40,20 @@ const questions = [
     type: 'input',
     name: 'headless',
     message: '是否需要查看爬虫的模拟过程? (Y/N)',
-    default: 'N'
+    default: 'Y'
   },
+  {
+    type: 'input',
+    name: 'output',
+    message: '请输入输出文件名',
+    default: 'output.csv'
+  }
 ]
 
 const closeDialog = async (page) => {
   let count = 0;
   const tryToCloseDialog = async (count) => {
     if (count > MAX_COUNT) return
-    page.waitForTimeout(3000)
     await page.waitForSelector(LOGIN_MASK)
     console.log('try to close login dialog')
     await page.click(LOGIN_MASK)
@@ -78,8 +83,12 @@ const initContext = async (url, headless) => {
   // 打开网页
   console.log(`open：${url}`)
   await page.goto(url)
-
-  await closeDialog(page)
+  await page.waitForTimeout(3000)
+  if (url.includes('explore')) {
+    await closeDialog(page)
+  } else {
+    await page.reload()
+  }
 
   return { browser, page }
 }
@@ -114,7 +123,7 @@ const craw = async (page, maxCount) => {
       const isConnected = await page.evaluate(el => el.isConnected, post);
       if (!isConnected) continue
 
-      console.log('analyse post: ', scrapedCount)
+      console.log('========== analyse post: ', scrapedCount)
 
       // 从详情页返回的时候确保元素加载完毕
       await page.waitForSelector(POST)
@@ -124,12 +133,12 @@ const craw = async (page, maxCount) => {
       // 点击帖子进入详情
       await post.click()
 
-      await page.waitForNetworkIdle()
+      await page.waitForTimeout(1000)
       await page.waitForSelector('a.name')
       await page.waitForSelector('div.title')
       await page.waitForSelector('div.date')
       await page.waitForSelector('span.count')
-      // 在这里添加获取帖子信息的代码
+
       const author = await page.$eval('a.name', node => node.innerText)
       const title = await page.$eval('div.title', node => node.innerText)
       const date = await page.$eval('div.date', node => node.innerText)
@@ -137,7 +146,7 @@ const craw = async (page, maxCount) => {
       const collects = await page.$eval('span.collect-wrapper > span.count', node => node.innerText)
       const comments = await page.$eval('span.chat-wrapper > span.count', node => node.innerText)
 
-      results.push({
+      const result = {
         author,
         cover,
         title,
@@ -145,9 +154,12 @@ const craw = async (page, maxCount) => {
         likes,
         collects,
         comments
-      })
+      }
+      console.log('result: ', result)
+      results.push(result)
 
       // 点击返回按钮回到列表页
+      await page.waitForSelector('div.close')
       await page.click('div.close')
       await page.waitForTimeout(1000)
       scrapedCount++
@@ -171,9 +183,9 @@ const sort = (list, sortBy) => {
   return results
 }
 
-const output = (results) => {
+const output = (path, results) => {
   const csvWriter = createCsvWriter({
-    path: 'out.csv',
+    path,
     header: [
       { id: 'author', title: '作者' },
       { id: 'title', title: '标题' },
@@ -187,7 +199,7 @@ const output = (results) => {
     append: false
   })
 
-  fs.writeFileSync('out.csv', '\ufeff', { encoding: 'utf8', flag: 'a' })  // 添加 BOM
+  fs.writeFileSync(path, '\ufeff', { encoding: 'utf8' })  // 添加 BOM
 
   csvWriter.writeRecords(results).then(() => {
     console.log('爬取完成，结果已写入 out.csv 文件。')
@@ -204,6 +216,6 @@ inquirer.prompt(questions).then(async (answers) => {
 
   const results = sort(list, answers.sortBy)
 
-  output(results)
+  output(answers.output, results)
 })
 
