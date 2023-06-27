@@ -1,9 +1,11 @@
 import puppeteer from 'puppeteer-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
+import { KnownDevices } from 'puppeteer'
 
 import inquirer from 'inquirer'
 import { createObjectCsvWriter as createCsvWriter } from 'csv-writer'
 import fs from 'fs'
+import { url } from 'inspector'
 
 puppeteer.use(StealthPlugin())
 
@@ -17,6 +19,10 @@ const questions = [
     type: 'input',
     name: 'targetURL',
     message: '请输入你想爬取的小红书页面的 URL',
+    validate: function (value) {
+      const isRedbook = value.includes('https://www.xiaohongshu.com/')
+      return isRedbook || '请输入正确的小红书 URL'
+    },
     default: 'https://www.xiaohongshu.com/explore?channel_id=homefeed.household_product_v3',
   },
   {
@@ -76,7 +82,6 @@ const initContext = async (url, headless) => {
   })
 
   const page = await browser.newPage()
-
   await page.setUserAgent(
     'Mozilla/5.0 (Windows NT 10.0 Win64 x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36'
   )
@@ -105,7 +110,7 @@ const getCoverImage = async (page) => {
   })
 }
 
-const craw = async (page, maxCount) => {
+const craw = async (listPage, maxCount, browser, url) => {
   // 存储结果数据
   const results = []
   // 记录已爬取的帖子数
@@ -114,37 +119,45 @@ const craw = async (page, maxCount) => {
   let scrapedPage = 0
   while (scrapedCount < maxCount) {
 
-    await page.waitForSelector(POST)
+    await listPage.waitForSelector(POST)
     // 获取页面帖子
-    const posts = await page.$$(POST)
+    const posts = await listPage.$$(POST)
 
     for (let post of posts) {
       if (scrapedCount >= maxCount) break
-      const isConnected = await page.evaluate(el => el.isConnected, post);
+      const isConnected = await listPage.evaluate(el => el.isConnected, post);
       if (!isConnected) continue
 
       console.log('========== analyse post: ', scrapedCount)
 
       // 从详情页返回的时候确保元素加载完毕
-      await page.waitForSelector(POST)
+      // await page.waitForSelector(POST)
 
-      const cover = await getCoverImage(page)
+      const cover = await getCoverImage(listPage)
 
       // 点击帖子进入详情
-      await post.click()
+      const detailPage = await browser.newPage()
+      const href = await listPage.evaluate(el => el.href, post);
+      await detailPage.goto(href)
 
-      await page.waitForTimeout(1000)
-      await page.waitForSelector('a.name')
-      await page.waitForSelector('div.title')
-      await page.waitForSelector('div.date')
-      await page.waitForSelector('span.count')
+      await detailPage.waitForTimeout(1000)
+      await detailPage.waitForSelector('a.name')
+      await detailPage.waitForSelector('div.title')
+      await detailPage.waitForSelector('div.date')
+      await detailPage.waitForSelector('span.count')
 
-      const author = await page.$eval('a.name', node => node.innerText)
-      const title = await page.$eval('div.title', node => node.innerText)
-      const date = await page.$eval('div.date', node => node.innerText)
-      const likes = await page.$eval('span.like-wrapper > span.count', node => node.innerText)
-      const collects = await page.$eval('span.collect-wrapper > span.count', node => node.innerText)
-      const comments = await page.$eval('span.chat-wrapper > span.count', node => node.innerText)
+      const author = await detailPage.$eval('a.name', node => node.innerText)
+      const title = await detailPage.$eval('div.title', node => node.innerText)
+      const date = await detailPage.$eval('div.date', node => node.innerText)
+      await detailPage.emulate(KnownDevices['iPhone X']);
+      await detailPage.waitForTimeout(1000)
+      await detailPage.reload()
+      await detailPage.waitForTimeout(1000)
+      await detailPage.waitForSelector('div.action-buttons')
+      const getSelector = (i) => `div.action-buttons > div:nth-child(${i}) > strong > span`
+      const likes = await detailPage.$eval(getSelector(1), node => node.innerText)
+      const collects = await detailPage.$eval(getSelector(2), node => node.innerText)
+      const comments = await detailPage.$eval(getSelector(3), node => node.innerText)
 
       const result = {
         author,
@@ -158,18 +171,17 @@ const craw = async (page, maxCount) => {
       console.log('result: ', result)
       results.push(result)
 
-      // 点击返回按钮回到列表页
-      await page.waitForSelector('div.close')
-      await page.click('div.close')
-      await page.waitForTimeout(1000)
+      await detailPage.close()
       scrapedCount++
     }
+
+    if (url.includes('profile') && scrapedCount >= 10) break
 
     scrapedPage++
     console.log('scroll to next page: ', scrapedPage)
     // 滚动页面
-    await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-    page.waitForTimeout(1000)
+    await listPage.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+    await listPage.waitForTimeout(1000)
   }
 
   return results
@@ -208,9 +220,12 @@ const output = (path, results) => {
 
 // 开始交互
 inquirer.prompt(questions).then(async (answers) => {
+  if (answers.targetURL.includes('profile') && answers.count > 10) {
+    console.log('小红书个人主页最多只展示 10 个帖子，只能爬取 10 条数据……发现页没有限制')
+  }
   const { browser, page } = await initContext(answers.targetURL, answers.headless === 'N' ? 'new' : false)
 
-  const list = await craw(page, answers.count)
+  const list = await craw(page, answers.count, browser, answers.targetURL)
 
   await browser.close()
 
